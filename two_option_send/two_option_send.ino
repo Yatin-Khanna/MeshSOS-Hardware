@@ -1,52 +1,11 @@
-/*
- * HelTec Automation(TM) LoRaWAN 1.0.2 OTAA example use OTAA, CLASS A
- *
- * Function summary:
- *
- * - use internal RTC(150KHz);
- *
- * - Include stop mode and deep sleep mode;
- *
- * - 15S data send cycle;
- *
- * - Informations output via serial(115200);
- *
- * - Only ESP32 + LoRa series boards can use this library, need a license
- *   to make the code run(check you license here: http://www.heltec.cn/search );
- *
- * You can change some definition in "Commissioning.h" and "LoRaMac-definitions.h"
- *
- * HelTec AutoMation, Chengdu, China.
- * 成都惠利特自动化科技有限公司
- * https://heltec.org
- * support@heltec.cn
- *
- *this project also release in GitHub:
- *https://github.com/HelTecAutomation/ESP32_LoRaWAN
- *
- *
- * To use this on Thethingsnetwork.org add the following Payload Formatter for this device
- /*
- function Decoder(bytes, port) {
-   var humidity = (bytes[0]<<8) | bytes[1];
-   var temperature = (bytes[2]<<8) | bytes[3];
-   return {
-      humidity: humidity/ 100,
-      temperature: temperature/100
-   }
- }
- */
-*/
-
 #include <ESP32_LoRaWAN.h>
-#include "Arduino.h"
 
-/*license for Heltec ESP32 LoRaWan, quary your ChipID relevant license: http://resource.heltec.cn/search */
-uint32_t  license[4] = {0x00000000,0x00000000,0x00000000,0x00000000};
+uint32_t  license[4] = {0x9F9176A5, 0x5E5B30EE, 0x78D0C1D4, 0xF8D6508C};
+
 /* OTAA para*/
-uint8_t DevEui[] = { 0x22, 0x32, 0x33, 0x00, 0x00, 0x88, 0x88, 0x02 };
-uint8_t AppEui[] = { 0x70, 0xB3, 0xD5, 0x7E, 0xD0, 0x02, 0xB1, 0x8A };
-uint8_t AppKey[] = { 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x66, 0x01 };
+uint8_t DevEui[] = { 0x21, 0xE4, 0x3F, 0x4C, 0x2D, 0x33, 0x1F, 0xE3 };
+uint8_t AppEui[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+uint8_t AppKey[] = { 0x62, 0x4E, 0xAC, 0xA1, 0xFD, 0x38, 0x95, 0xF0, 0x1B, 0x12, 0xBC, 0x64, 0xFA, 0x7D, 0x67, 0xD2 };
 
 /* ABP para*/
 uint8_t NwkSKey[] = { 0x15, 0xb1, 0xd0, 0xef, 0xa4, 0x63, 0xdf, 0xbe, 0x3d, 0x11, 0x18, 0x1e, 0x1e, 0xc7, 0xda,0x85 };
@@ -100,68 +59,137 @@ uint8_t confirmedNbTrials = 8;
 * None : print basic info.
 * Freq : print Tx and Rx freq, DR info.
 * Freq && DIO : print Tx and Rx freq, DR, DIO0 interrupt and DIO1 interrupt info.
-* Freq && DIO && PW: print Tx and Rx freq, DR, DIO0 interrupt, DIO1 interrupt, MCU sleep and MCU wake info.
+* Freq && DIO && PW: print Tx and Rx freq, DR, DIO0 interrupt, DIO1 interrupt and MCU deepsleep info.
 */
 uint8_t debugLevel = LoRaWAN_DEBUG_LEVEL;
 
 /*LoraWan region, select in arduino IDE tools*/
 LoRaMacRegion_t loraWanRegion = ACTIVE_REGION;
 
+#define BAND 865E6
+#define LEDPin 25  //LED light
+#define HEALTH_BUTTON 2
+#define POLICE_BUTTON 17
+
+void app(uint8_t data)
+ {
+    // lora_printf("data:%d\r\n",data);
+   switch(data)
+     {
+    case 49:
+    {
+      pinMode(LEDPin,OUTPUT);
+      digitalWrite(LEDPin, HIGH);
+      break;
+    }
+    case 50:
+    {
+      pinMode(LEDPin,OUTPUT);
+      digitalWrite(LEDPin, LOW);
+      break;
+    }
+    case 51:
+    {
+      break;
+    }
+    default:
+    {
+      break;
+    }
+     }
+ }
+
+
+void  downLinkDataHandle(McpsIndication_t *mcpsIndication)
+{
+  lora_printf("+REV DATA:%s,RXSIZE %d,PORT %d\r\n",mcpsIndication->RxSlot?"RXWIN2":"RXWIN1",mcpsIndication->BufferSize,mcpsIndication->Port);
+  lora_printf("+REV DATA:");
+    app(mcpsIndication->Buffer[0]);
+
+//  Display.clear();
+//  Display.drawString(0, 0, (const char *)mcpsIndication->Buffer);
+  for(uint8_t i=0;i<mcpsIndication->BufferSize;i++)
+  {
+    lora_printf("%c",mcpsIndication->Buffer[i]);
+  }
+  lora_printf("\r\n");
+  delay(2000);
+}
+
+uint8_t emergency_type;
 
 static void prepareTxFrame( uint8_t port )
 {
-    // Prepare upstream data transmission at the next possible time.
-    uint32_t humidity = dht.readHumidity(false) * 100;
-    uint32_t temperature = dht.readTemperature(false) * 100;
-	
-    appDataSize = 4;//AppDataSize max value is 64
-    // Format the data to bytes	
-    appData[0] = highByte(humidity);
-    appData[1] = lowByte(humidity);
-    appData[2] = highByte(temperature);
-    appData[3] = lowByte(temperature);
-	
+    float latitude = 65.3328;   // Replace by a function or something
+    float longitude = 77.2134; // Replace by a function or something
+    uint8_t* lati_arr = (uint8_t*)&latitude;
+    uint8_t* long_arr = (uint8_t*)&longitude;
+    appDataSize = 9;  //AppDataSize max value is 64
+    for(int i=0; i<8; i++) {
+      if(i < 4) { 
+        appData[i] = lati_arr[i];
+      } else {
+        appData[i] = long_arr[i - 4];
+       }
+    }
+    appData[8] = emergency_type;
 }
 
 // Add your initialization code here
 void setup()
 {
-  if(mcuStarted==0)
-  {
-    LoRaWAN.displayMcuInit();
-  }
   Serial.begin(115200);
   while (!Serial);
+//  Display.init();
+//  Display.setFont(ArialMT_Plain_10);
+//  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+//  Display.drawString(0, 0, "Starting!!");
+//  Display.display();
+
+  pinMode(HEALTH_BUTTON, INPUT);
+  pinMode(POLICE_BUTTON, INPUT);
+  
   SPI.begin(SCK,MISO,MOSI,SS);
   Mcu.init(SS,RST_LoRa,DIO0,DIO1,license);
   deviceState = DEVICE_STATE_INIT;
+  delay(1000);
+//  Display.clear();
 }
 
 // The loop function is called in an endless loop
 void loop()
 {
+  byte buttonState = digitalRead(HEALTH_BUTTON);
+  byte button2State = digitalRead(POLICE_BUTTON);
+
   switch( deviceState )
   {
     case DEVICE_STATE_INIT:
     {
 #if(LORAWAN_DEVEUI_AUTO)
-			LoRaWAN.generateDeveuiByChipID();
+      LoRaWAN.generateDeveuiByChipID();
 #endif
       LoRaWAN.init(loraWanClass,loraWanRegion);
       break;
     }
     case DEVICE_STATE_JOIN:
     {
-      LoRaWAN.displayJoining();
       LoRaWAN.join();
       break;
     }
     case DEVICE_STATE_SEND:
     {
-      LoRaWAN.displaySending();
-      prepareTxFrame( appPort );
-      LoRaWAN.send(loraWanClass);
-      deviceState = DEVICE_STATE_CYCLE;
+      if(buttonState == HIGH) emergency_type = 1;
+      else if(button2State == HIGH) emergency_type = 2;
+      else emergency_type = 0; 
+
+      Serial.print("Sending "); Serial.println(emergency_type); 
+
+      if(emergency_type != 0) {
+        prepareTxFrame( appPort );
+        LoRaWAN.send(loraWanClass);
+        deviceState = DEVICE_STATE_CYCLE;
+      }
       break;
     }
     case DEVICE_STATE_CYCLE:
@@ -174,7 +202,6 @@ void loop()
     }
     case DEVICE_STATE_SLEEP:
     {
-      LoRaWAN.displayAck();
       LoRaWAN.sleep(loraWanClass,debugLevel);
       break;
     }

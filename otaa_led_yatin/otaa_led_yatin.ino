@@ -32,9 +32,10 @@
 */
 
 #include <ESP32_LoRaWAN.h>
-#include "Arduino.h"
 
-/*license for Heltec ESP32 LoRaWan, quary your ChipID relevant license: http://resource.heltec.cn/search */
+
+
+
 uint32_t  license[4] = {0x9F9176A5, 0x5E5B30EE, 0x78D0C1D4, 0xF8D6508C};
 
 /* OTAA para*/
@@ -101,7 +102,7 @@ uint8_t debugLevel = LoRaWAN_DEBUG_LEVEL;
 /*LoraWan region, select in arduino IDE tools*/
 LoRaMacRegion_t loraWanRegion = ACTIVE_REGION;
 
-
+#define BAND 865E6
 #define LEDPin 25  //LED light
 void app(uint8_t data)
  {
@@ -138,30 +139,32 @@ void  downLinkDataHandle(McpsIndication_t *mcpsIndication)
   lora_printf("+REV DATA:");
     app(mcpsIndication->Buffer[0]);
 
+  Display.clear();
+  Display.drawString(0, 0, (const char *)mcpsIndication->Buffer);
   for(uint8_t i=0;i<mcpsIndication->BufferSize;i++)
   {
-    lora_printf("%02X",mcpsIndication->Buffer[i]);
+    lora_printf("%c",mcpsIndication->Buffer[i]);
   }
   lora_printf("\r\n");
+  delay(2000);
 }
 
 
 
 static void prepareTxFrame( uint8_t port )
 {
-    float latitude = 31.3328;   // Replace by a function or something
-    float longitude = 110.2134; // Replace by a function or something
+    float latitude = 65.3328;   // Replace by a function or something
+    float longitude = 77.2134; // Replace by a function or something
     uint8_t* lati_arr = (uint8_t*)&latitude;
     uint8_t* long_arr = (uint8_t*)&longitude;
     appDataSize = 8;//AppDataSize max value is 64
-    appData[0] = lati_arr[0];
-    appData[1] = lati_arr[1];
-    appData[2] = lati_arr[2];
-    appData[3] = lati_arr[3];
-    appData[4] = long_arr[0];
-    appData[5] = long_arr[1];
-    appData[6] = long_arr[2];
-    appData[7] = long_arr[3];
+    for(int i=0; i<8; i++) {
+      if(i < 4) { 
+        appData[i] = lati_arr[i];
+      } else {
+        appData[i] = long_arr[i - 4];
+       }
+    }
 }
 
 // Add your initialization code here
@@ -169,9 +172,16 @@ void setup()
 {
   Serial.begin(115200);
   while (!Serial);
+  Display.init();
+  Display.setFont(ArialMT_Plain_10);
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  Display.drawString(0, 0, "Starting!!");
+  Display.display();
   SPI.begin(SCK,MISO,MOSI,SS);
   Mcu.init(SS,RST_LoRa,DIO0,DIO1,license);
   deviceState = DEVICE_STATE_INIT;
+  delay(1000);
+  Display.clear();
 }
 
 // The loop function is called in an endless loop
