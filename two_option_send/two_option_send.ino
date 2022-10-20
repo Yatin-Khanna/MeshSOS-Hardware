@@ -1,7 +1,10 @@
 #include <ESP32_LoRaWAN.h>
+#include <string>
+#include "TinyGPS++.h"
 
+TinyGPSPlus gps;
 uint32_t  license[4] = {0x9F9176A5, 0x5E5B30EE, 0x78D0C1D4, 0xF8D6508C};
-
+const uint32_t GPSBaud = 9600;
 /* OTAA para*/
 uint8_t DevEui[] = { 0x21, 0xE4, 0x3F, 0x4C, 0x2D, 0x33, 0x1F, 0xE3 };
 uint8_t AppEui[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
@@ -16,7 +19,7 @@ uint32_t DevAddr =  ( uint32_t )0x007e6ae1;
 uint16_t userChannelsMask[6]={ 0x00FF,0x0000,0x0000,0x0000,0x0000,0x0000 };
 
 /*LoraWan Class, Class A and Class C are supported*/
-DeviceClass_t  loraWanClass = CLASS_A;
+DeviceClass_t  loraWanClass = CLASS_C;
 
 /*the application data transmission duty cycle.  value in [ms].*/
 uint32_t appTxDutyCycle = 15000;
@@ -68,8 +71,8 @@ LoRaMacRegion_t loraWanRegion = ACTIVE_REGION;
 
 #define BAND 865E6
 #define LEDPin 25  //LED light
-#define HEALTH_BUTTON 2
-#define POLICE_BUTTON 17
+#define HEALTH_BUTTON 34
+#define POLICE_BUTTON 35
 
 void app(uint8_t data)
  {
@@ -99,6 +102,8 @@ void app(uint8_t data)
      }
  }
 
+bool response_received = false;
+std::string response;
 
 void  downLinkDataHandle(McpsIndication_t *mcpsIndication)
 {
@@ -106,22 +111,19 @@ void  downLinkDataHandle(McpsIndication_t *mcpsIndication)
   lora_printf("+REV DATA:");
     app(mcpsIndication->Buffer[0]);
 
-//  Display.clear();
-//  Display.drawString(0, 0, (const char *)mcpsIndication->Buffer);
+  response_received = true;
+  response = "Response: ";
   for(uint8_t i=0;i<mcpsIndication->BufferSize;i++)
   {
-    lora_printf("%c",mcpsIndication->Buffer[i]);
+      lora_printf("%c",mcpsIndication->Buffer[i]);
+      response += mcpsIndication->Buffer[i];
   }
-  lora_printf("\r\n");
-  delay(2000);
 }
 
 uint8_t emergency_type;
-
+float latitude = 0.0, longitude = 0.0;
 static void prepareTxFrame( uint8_t port )
 {
-    float latitude = 65.3328;   // Replace by a function or something
-    float longitude = 77.2134; // Replace by a function or something
     uint8_t* lati_arr = (uint8_t*)&latitude;
     uint8_t* long_arr = (uint8_t*)&longitude;
     appDataSize = 9;  //AppDataSize max value is 64
@@ -139,12 +141,13 @@ static void prepareTxFrame( uint8_t port )
 void setup()
 {
   Serial.begin(115200);
+  Serial2.begin(GPSBaud, SERIAL_8N1, 2, 17);
   while (!Serial);
-//  Display.init();
-//  Display.setFont(ArialMT_Plain_10);
-//  Display.setTextAlignment(TEXT_ALIGN_LEFT);
-//  Display.drawString(0, 0, "Starting!!");
-//  Display.display();
+  Display.init();
+  Display.setFont(ArialMT_Plain_10);
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  Display.drawString(0, 0, "Starting!!");
+  Display.display();
 
   pinMode(HEALTH_BUTTON, INPUT);
   pinMode(POLICE_BUTTON, INPUT);
@@ -159,10 +162,37 @@ void setup()
 // The loop function is called in an endless loop
 void loop()
 {
+  if(response_received) {
+    Serial.println("Message was Received");
+    Display.clear();
+    Display.drawString(0, 0, response.c_str());
+    Display.display();
+    delay(5000);
+    response_received = false;
+  }
+  
+  while(Serial2.available())
+  {
+//      Serial.print(".");
+      if(gps.encode(Serial2.read()))
+      {
+//          String msg = Serial2.readStringUntil('\r');
+//          Serial.println(msg);
+
+//            Serial.print("LAT="); Serial.println(gps.location.lat(), 6);
+//            Serial.print("LONG="); Serial.println(gps.location.lng(), 6);
+//            Serial.print("ALT="); Serial.println(gps.altitude.meters(), 6);
+//            delay(4*1000);
+              latitude = (float)gps.location.lat();
+              longitude = (float)gps.location.lng();
+        }
+    }  
   byte buttonState = digitalRead(HEALTH_BUTTON);
   byte button2State = digitalRead(POLICE_BUTTON);
 
   switch( deviceState )
+
+  
   {
     case DEVICE_STATE_INIT:
     {
@@ -183,9 +213,11 @@ void loop()
       else if(button2State == HIGH) emergency_type = 2;
       else emergency_type = 0; 
 
-      Serial.print("Sending "); Serial.println(emergency_type); 
-
       if(emergency_type != 0) {
+        std::string message = std::string("Sending ") + std::string(emergency_type == 1 ? "Health " : "Police ") + std::string("Emergency");
+        Display.clear();
+        Display.drawString(0, 0, message.c_str());
+        Display.display(); 
         prepareTxFrame( appPort );
         LoRaWAN.send(loraWanClass);
         deviceState = DEVICE_STATE_CYCLE;
