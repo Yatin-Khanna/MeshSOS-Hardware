@@ -1,8 +1,8 @@
 #include <ESP32_LoRaWAN.h>
-#include <string>
+#include <string.h>
+#include <cstring>
 #include "TinyGPS++.h"
 
-TinyGPSPlus gps;
 uint32_t  license[4] = {0x9F9176A5, 0x5E5B30EE, 0x78D0C1D4, 0xF8D6508C};
 const uint32_t GPSBaud = 9600;
 /* OTAA para*/
@@ -74,171 +74,204 @@ LoRaMacRegion_t loraWanRegion = ACTIVE_REGION;
 #define HEALTH_BUTTON 34
 #define POLICE_BUTTON 35
 
-void app(uint8_t data)
- {
-    // lora_printf("data:%d\r\n",data);
-   switch(data)
-     {
-    case 49:
-    {
-      pinMode(LEDPin,OUTPUT);
-      digitalWrite(LEDPin, HIGH);
-      break;
-    }
-    case 50:
-    {
-      pinMode(LEDPin,OUTPUT);
-      digitalWrite(LEDPin, LOW);
-      break;
-    }
-    case 51:
-    {
-      break;
-    }
-    default:
-    {
-      break;
-    }
+struct GPSHandler {
+   TinyGPSPlus gps;
+   float latitude, longitude;
+   uint16_t year;
+   uint8_t month, day, hour, minute, second;
+   GPSHandler(): latitude(0.0), longitude(0.0), year(0), month(0), day(0), hour(0), minute(0), second(0) {}
+   void updateData() {
+      if(gps.encode(Serial2.read())) {
+          latitude = (float)gps.location.lat();
+          longitude = (float)gps.location.lng();
+          year = gps.date.year();
+          month = gps.date.month();
+          day = gps.date.day();
+          hour = gps.time.hour();
+          minute = gps.time.minute();
+          second = gps.time.second();
+      }
+   }
+   void fillAppData(uint8_t* appData) {
+      std::memcpy(appData, &latitude, 4);
+      std::memcpy(appData + 4, &longitude, 4);
+      /* 8th position is for emergency type, will be filled elsewhere */
+      std::memcpy(appData + 9, &year, 2);
+      appData[11] = month; appData[12] = day;
+      appData[13] = hour; appData[14] = minute;
+      appData[15] = second;
+   }
+};
+GPSHandler GPS;
+
+struct DisplayHandler {
+  void init() {
+    Display.init();
+    Display.setFont(ArialMT_Plain_10);
+    Display.setTextAlignment(TEXT_ALIGN_LEFT);
+    /* Next 2 lines are only for testing */
+    Display.drawString(0, 0, "Starting!!");
+    Display.display();
+  }
+  void print(std::string &str, uint8_t x = 0, uint8_t y = 0) {
+    Display.clear();
+    Display.drawString(x, y, str.c_str());
+    Display.display();
+  }
+  void print(const char* str, uint8_t x = 0, uint8_t y = 0) {
+    Display.clear();
+    Display.drawString(x, y, str);
+    Display.display();
+  }
+  void clear() {
+    Display.clear();
+  }
+};
+DisplayHandler displayHandler;
+
+struct PushButtonHandler {
+   byte healthButtonState, policeButtonState;
+   void init() {
+     pinMode(HEALTH_BUTTON, INPUT);
+     pinMode(POLICE_BUTTON, INPUT);
+   }
+   void readButtons() { 
+     healthButtonState = digitalRead(HEALTH_BUTTON);
+     policeButtonState = digitalRead(POLICE_BUTTON);
+   }
+   /* 0 -> No emergency, 1 -> Health emergency, 2 -> Police emergency */
+   uint8_t getEmergency() {
+     if(healthButtonState == HIGH) return 1;
+     else if(policeButtonState == HIGH) return 2;
+     return 0;
+   }
+};
+PushButtonHandler buttonHandler;
+
+struct Response {
+   bool received;
+   std::string message;
+   Response(): received(false), message("") {} 
+   void receive(uint8_t* buffer, uint8_t length) {
+      received = true;
+      message = "Response: ";
+      for(int i=0; i<length; i++) {
+        message += buffer[i];
+      }
+   }
+   void reset() {
+     received = false;
+     message = "";
+   }
+};
+Response response;
+
+void app(uint8_t data) {
+   switch(data) {
+      case 49: {
+       pinMode(LEDPin,OUTPUT);
+       digitalWrite(LEDPin, HIGH);
+       break;
      }
- }
+     case 50: {
+       pinMode(LEDPin,OUTPUT);
+       digitalWrite(LEDPin, LOW);
+       break;
+     }
+     case 51: {
+       break;
+     }
+     default: {
+       break;
+     }
+   }
+}
 
-bool response_received = false;
-std::string response;
-
-void  downLinkDataHandle(McpsIndication_t *mcpsIndication)
-{
+void  downLinkDataHandle(McpsIndication_t *mcpsIndication) {
   lora_printf("+REV DATA:%s,RXSIZE %d,PORT %d\r\n",mcpsIndication->RxSlot?"RXWIN2":"RXWIN1",mcpsIndication->BufferSize,mcpsIndication->Port);
   lora_printf("+REV DATA:");
-    app(mcpsIndication->Buffer[0]);
-
-  response_received = true;
-  response = "Response: ";
-  for(uint8_t i=0;i<mcpsIndication->BufferSize;i++)
-  {
+  app(mcpsIndication->Buffer[0]);
+  /* update response */
+  response.receive(mcpsIndication->Buffer, mcpsIndication->BufferSize);
+  
+  for(uint8_t i=0;i<mcpsIndication->BufferSize;i++) {
       lora_printf("%c",mcpsIndication->Buffer[i]);
-      response += mcpsIndication->Buffer[i];
   }
 }
 
 uint8_t emergency_type;
-float latitude = 0.0, longitude = 0.0;
-static void prepareTxFrame( uint8_t port )
-{
-    uint8_t* lati_arr = (uint8_t*)&latitude;
-    uint8_t* long_arr = (uint8_t*)&longitude;
-    appDataSize = 9;  //AppDataSize max value is 64
-    for(int i=0; i<8; i++) {
-      if(i < 4) { 
-        appData[i] = lati_arr[i];
-      } else {
-        appData[i] = long_arr[i - 4];
-       }
-    }
+
+static void prepareTxFrame( uint8_t port, uint8_t emergency_type ) {
+    appDataSize = 16;
+    GPS.fillAppData(appData);
     appData[8] = emergency_type;
 }
 
-// Add your initialization code here
-void setup()
-{
+void setup() {
   Serial.begin(115200);
   Serial2.begin(GPSBaud, SERIAL_8N1, 2, 17);
   while (!Serial);
-  Display.init();
-  Display.setFont(ArialMT_Plain_10);
-  Display.setTextAlignment(TEXT_ALIGN_LEFT);
-  Display.drawString(0, 0, "Starting!!");
-  Display.display();
+  /* Initialise display */
+  displayHandler.init();
+  /* Initialise buttons (associate them with pins) */
+  buttonHandler.init();
 
-  pinMode(HEALTH_BUTTON, INPUT);
-  pinMode(POLICE_BUTTON, INPUT);
-  
+  /* Library stuff for LoRaWAN/LoRa */
   SPI.begin(SCK,MISO,MOSI,SS);
   Mcu.init(SS,RST_LoRa,DIO0,DIO1,license);
   deviceState = DEVICE_STATE_INIT;
   delay(1000);
-//  Display.clear();
 }
 
 // The loop function is called in an endless loop
-void loop()
-{
-  if(response_received) {
-    Serial.println("Message was Received");
-    Display.clear();
-    Display.drawString(0, 0, response.c_str());
-    Display.display();
+void loop() {
+  if(response.received) {
+    displayHandler.print(response.message);
     delay(5000);
-    response_received = false;
+    response.reset();
   }
   
-  while(Serial2.available())
-  {
-//      Serial.print(".");
-      if(gps.encode(Serial2.read()))
-      {
-//          String msg = Serial2.readStringUntil('\r');
-//          Serial.println(msg);
+  while(Serial2.available()) {    /* TODO: maybe run it less frequently (every minute maybe??)  */
+     GPS.updateData();            /* update GPS data if it can be updated */
+  }  
 
-//            Serial.print("LAT="); Serial.println(gps.location.lat(), 6);
-//            Serial.print("LONG="); Serial.println(gps.location.lng(), 6);
-//            Serial.print("ALT="); Serial.println(gps.altitude.meters(), 6);
-//            delay(4*1000);
-              latitude = (float)gps.location.lat();
-              longitude = (float)gps.location.lng();
-        }
-    }  
-  byte buttonState = digitalRead(HEALTH_BUTTON);
-  byte button2State = digitalRead(POLICE_BUTTON);
+  buttonHandler.readButtons();
 
-  switch( deviceState )
-
-  
-  {
-    case DEVICE_STATE_INIT:
-    {
-#if(LORAWAN_DEVEUI_AUTO)
-      LoRaWAN.generateDeveuiByChipID();
-#endif
+  switch( deviceState ) {
+    case DEVICE_STATE_INIT: {
+      #if(LORAWAN_DEVEUI_AUTO)
+          LoRaWAN.generateDeveuiByChipID();
+      #endif
       LoRaWAN.init(loraWanClass,loraWanRegion);
       break;
     }
-    case DEVICE_STATE_JOIN:
-    {
+    case DEVICE_STATE_JOIN: {
       LoRaWAN.join();
       break;
     }
-    case DEVICE_STATE_SEND:
-    {
-      if(buttonState == HIGH) emergency_type = 1;
-      else if(button2State == HIGH) emergency_type = 2;
-      else emergency_type = 0; 
-
+    case DEVICE_STATE_SEND: {
+      uint8_t emergency_type = buttonHandler.getEmergency();
       if(emergency_type != 0) {
         std::string message = std::string("Sending ") + std::string(emergency_type == 1 ? "Health " : "Police ") + std::string("Emergency");
-        Display.clear();
-        Display.drawString(0, 0, message.c_str());
-        Display.display(); 
-        prepareTxFrame( appPort );
+        displayHandler.print(message);
+        prepareTxFrame( appPort, emergency_type );
         LoRaWAN.send(loraWanClass);
         deviceState = DEVICE_STATE_CYCLE;
       }
       break;
     }
-    case DEVICE_STATE_CYCLE:
-    {
+    case DEVICE_STATE_CYCLE: {
       // Schedule next packet transmission
       txDutyCycleTime = appTxDutyCycle + randr( -APP_TX_DUTYCYCLE_RND, APP_TX_DUTYCYCLE_RND );
       LoRaWAN.cycle(txDutyCycleTime);
       deviceState = DEVICE_STATE_SLEEP;
       break;
     }
-    case DEVICE_STATE_SLEEP:
-    {
+    case DEVICE_STATE_SLEEP: {
       LoRaWAN.sleep(loraWanClass,debugLevel);
       break;
     }
-    default:
-    {
+    default: {
       deviceState = DEVICE_STATE_INIT;
       break;
     }
